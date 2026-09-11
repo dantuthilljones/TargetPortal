@@ -40,6 +40,7 @@ public class TargetPortal : BaseUnityPlugin
 	public static ConfigEntry<IgnoreItems> ignoreItemsTeleport = null!;
 	private static ConfigEntry<KeyboardShortcut> portalModeToggleModifierKey = null!;
 	public static ConfigEntry<KeyboardShortcut> mapPortalIconKey = null!;
+	public static ConfigEntry<KeyboardShortcut> mapPinsToggleKey = null!;
 	private static ConfigEntry<PortalMode> defaultPortalMode = null!;
 	public static ConfigEntry<Toggle> allowIconToggleWithoutMap = null!;
 	public static ConfigEntry<string> gamepadTravelButton = null!;
@@ -48,6 +49,7 @@ public class TargetPortal : BaseUnityPlugin
 	public static ConfigEntry<string> gamepadCyclePrevButton = null!;
 	public static ConfigEntry<string> gamepadFavoritePrevButton = null!;
 	public static ConfigEntry<string> gamepadFavoriteNextButton = null!;
+	public static ConfigEntry<string> gamepadMapPinsButton = null!;
 	public static ConfigEntry<string> gamepadIconToggleButton = null!;
 	private static ConfigEntry<string> gamepadPortalModeButton = null!;
 
@@ -96,6 +98,7 @@ public class TargetPortal : BaseUnityPlugin
 		showPlayersDuringPortal = config("1 - General", "Show player pins", Toggle.On, "If on, all player map pins will be shown on the map that lets you select a target portal.", false);
 		portalAnimation = config("1 - General", "Portal Animation", Toggle.On, "If on, portals will display their whirling animation while a player is infront of them.", false);
 		mapPortalIconKey = config("1 - General", "Hotkey map icons", new KeyboardShortcut(KeyCode.P), "Hotkey to press while the map is open to toggle portal icons.", false);
+		mapPinsToggleKey = config("1 - General", "Hotkey map pins", new KeyboardShortcut(KeyCode.H), "Hotkey to press while choosing a target portal, to show or hide your other map pins.", false);
 		portalNameLength = config("1 - General", "Maximum length for portal names", 10, new ConfigDescription("Maximum length for portal names.", new AcceptableValueRange<int>(5, 100)));
 		maximumNumberOfPortals = config("1 - General", "Maximum number of portals", 0, new ConfigDescription("Sets the maximum number of portals allowed in the world. Use 0 for no limit."));
 		ignoreItemsTeleport = config("1 - General", "Ignore item teleport restrictions", IgnoreItems.Default, new ConfigDescription("Never: Do not allow teleportation of restricted items.\nDefault: Keep vanilla behavior for portals.\nAlways: Ignore item restrictions on portals."));
@@ -109,6 +112,7 @@ public class TargetPortal : BaseUnityPlugin
 		gamepadCycleNextButton = config("2 - Controller", "Next portal button", "JoyTabRight", new ConfigDescription($"Button to center the map on the next portal while choosing a target. {gamepadHint}"), false);
 		gamepadFavoritePrevButton = config("2 - Controller", "Previous favorite button", "JoyDPadUp", new ConfigDescription($"Button to move up the favorites list while choosing a target. {gamepadHint}"), false);
 		gamepadFavoriteNextButton = config("2 - Controller", "Next favorite button", "JoyDPadDown", new ConfigDescription($"Button to move down the favorites list while choosing a target. {gamepadHint}"), false);
+		gamepadMapPinsButton = config("2 - Controller", "Toggle map pins button", "JoyButtonY", new ConfigDescription($"Button to show or hide your other map pins while choosing a target portal. {gamepadHint}"), false);
 		gamepadIconToggleButton = config("2 - Controller", "Toggle icons button", "JoyDPadLeft", new ConfigDescription($"Button to toggle portal icons on the map, the controller equivalent of the icon hotkey. {gamepadHint}"), false);
 		gamepadPortalModeButton = config("2 - Controller", "Modifier for toggle", "JoyAltKeys", new ConfigDescription($"Button that has to be held while interacting with a portal to toggle its mode, the controller equivalent of the modifier key. {gamepadHint}"), false);
 

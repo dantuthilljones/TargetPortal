@@ -21,13 +21,18 @@ public static class Map
 	private static readonly Dictionary<Minimap.PinData, ZDO> activePins = new();
 	private static bool shouldPortalsBeVisible = false;
 	private static bool[]? visibleIconTypes;
+	private static bool mapPinsHidden;
 	private static GameObject favoriteList = null!;
 	private static int gamepadSelection = -1;
 	private static Minimap.PinData? gamepadFocus;
 	private static readonly List<FavoriteEntry> favoriteEntries = new();
 	private static GameObject hintPanel = null!;
-	private static readonly List<GameObject> hiddenVanillaHints = new();
+	private static readonly List<GameObject> hiddenVanillaUi = new();
 	private static bool hintsBuiltForGamepad;
+
+	// Vanilla panels on the large map that have no meaning while choosing a portal.
+	// These are the pin type selector rows; Minimap.m_hints covers the key hints.
+	private static readonly string[] vanillaMapPanels = { "IconPanel", "IconPanel2", "IconPingPanel" };
 
 	private class FavoriteEntry
 	{
@@ -70,11 +75,9 @@ public static class Map
 				InventoryGui.instance.Hide();
 			}
 
-			if (TargetPortal.hidePinsDuringPortal.Value == TargetPortal.Toggle.On && visibleIconTypes == null)
+			if (TargetPortal.hidePinsDuringPortal.Value == TargetPortal.Toggle.On && !mapPinsHidden)
 			{
-				visibleIconTypes = new bool[Minimap.instance.m_visibleIconTypes.Length];
-				Array.Copy(Minimap.instance.m_visibleIconTypes, visibleIconTypes, Minimap.instance.m_visibleIconTypes.Length);
-				ToggleIconFilters(true);
+				HideMapPins();
 			}
 
 			return false;
@@ -114,23 +117,57 @@ public static class Map
 		}
 	}
 
+	// Hiding the other map pins is a config option, but it is also toggleable during
+	// selection, so what gets restored afterwards depends on what is hidden right now
+	// rather than on the option.
+	private static void HideMapPins()
+	{
+		if (visibleIconTypes == null)
+		{
+			visibleIconTypes = new bool[Minimap.instance.m_visibleIconTypes.Length];
+			Array.Copy(Minimap.instance.m_visibleIconTypes, visibleIconTypes, Minimap.instance.m_visibleIconTypes.Length);
+		}
+
+		ToggleIconFilters(true);
+		mapPinsHidden = true;
+	}
+
+	private static void ShowMapPins()
+	{
+		ToggleIconFilters();
+		mapPinsHidden = false;
+	}
+
+	private static void ToggleMapPins()
+	{
+		if (mapPinsHidden)
+		{
+			ShowMapPins();
+		}
+		else
+		{
+			HideMapPins();
+		}
+	}
+
 	public static void CancelTeleport()
 	{
 		Teleporting = false;
 		gamepadSelection = -1;
 		gamepadFocus = null;
-		HidePortalHints();
+		RestoreVanillaMapUi();
 
 		if (!shouldPortalsBeVisible)
 		{
 			RemovePortalPins();
 		}
 
-		if (TargetPortal.hidePinsDuringPortal.Value == TargetPortal.Toggle.On)
+		if (mapPinsHidden)
 		{
-			ToggleIconFilters();
-			visibleIconTypes = null;
+			ShowMapPins();
 		}
+
+		visibleIconTypes = null;
 	}
 
 	delegate bool GetPortal(out Minimap.PinData? closestPin, out ZDO? portalZDO);
@@ -207,7 +244,7 @@ public static class Map
 				// SetMapMode re-enables every vanilla hint row, so re-apply ours. This
 				// is also what puts the panel up in the first place, since entering a
 				// portal reaches here via ShowPointOnMap.
-				ShowPortalHints();
+				ShowPortalSelectionUi();
 			}
 		}
 	}
@@ -357,33 +394,50 @@ public static class Map
 		}
 	}
 
-	// While choosing a portal, most of the vanilla map actions (add pin, remove pin,
-	// ping, shared map) do nothing, and none of the controller bindings this mod adds
-	// are listed. Hide vanilla's rows wholesale and render a panel describing what is
-	// actually available instead.
-	private static void ShowPortalHints()
+	// Everything on the large map that does not apply while choosing a portal: the key
+	// hints, which describe actions that mostly do nothing here and list none of the
+	// controller bindings this mod adds, and the pin type selector, whose filters this
+	// mod overrides for the duration anyway.
+	private static IEnumerable<GameObject> VanillaSelectionUi()
+	{
+		foreach (GameObject hint in Minimap.instance.m_hints)
+		{
+			yield return hint;
+		}
+
+		foreach (string panel in vanillaMapPanels)
+		{
+			if (Minimap.instance.m_largeRoot.transform.Find(panel) is { } found)
+			{
+				yield return found.gameObject;
+			}
+		}
+	}
+
+	private static void ShowPortalSelectionUi()
 	{
 		if (!hintPanel)
 		{
 			return;
 		}
 
-		foreach (GameObject hint in Minimap.instance.m_hints)
+		foreach (GameObject element in VanillaSelectionUi())
 		{
-			// Records rows enabled since the last call, so this stays correct when
-			// SetMapMode re-enables them underneath us, and leaves rows alone entirely
-			// when the player has key hints switched off.
-			if (hint && hint.activeSelf && !hiddenVanillaHints.Contains(hint))
+			// Records what was enabled since the last call, so this stays correct when
+			// SetMapMode re-enables things underneath us, and never switches on
+			// something that was already off - key hints the player has disabled, or
+			// the ping panel, which is only shown in some situations.
+			if (element && element.activeSelf && !hiddenVanillaUi.Contains(element))
 			{
-				hiddenVanillaHints.Add(hint);
+				hiddenVanillaUi.Add(element);
 			}
 		}
 
-		foreach (GameObject hint in hiddenVanillaHints)
+		foreach (GameObject element in hiddenVanillaUi)
 		{
-			if (hint)
+			if (element)
 			{
-				hint.SetActive(false);
+				element.SetActive(false);
 			}
 		}
 
@@ -391,22 +445,22 @@ public static class Map
 		hintPanel.SetActive(true);
 	}
 
-	private static void HidePortalHints()
+	private static void RestoreVanillaMapUi()
 	{
 		if (!hintPanel)
 		{
 			return;
 		}
 
-		foreach (GameObject hint in hiddenVanillaHints)
+		foreach (GameObject element in hiddenVanillaUi)
 		{
-			if (hint)
+			if (element)
 			{
-				hint.SetActive(true);
+				element.SetActive(true);
 			}
 		}
 
-		hiddenVanillaHints.Clear();
+		hiddenVanillaUi.Clear();
 		hintPanel.SetActive(false);
 	}
 
@@ -421,6 +475,9 @@ public static class Map
 		return a.Length > 0 && b.Length > 0 ? $"{a} / {b}" : a + b;
 	}
 
+	// Deliberately no row for the portal icon toggle. It controls whether portal icons
+	// show on the normal map, and has no visible effect while a portal is being chosen,
+	// where portal pins are always shown. Listing it here reads as a broken button.
 	private static void BuildHintRows()
 	{
 		for (int i = 0; i < hintPanel.transform.childCount; ++i)
@@ -436,7 +493,7 @@ public static class Map
 			AddHintRow(Bound(TargetPortal.gamepadFavoriteButton.Value), "Toggle favorite");
 			AddHintRow(BoundPair(TargetPortal.gamepadCyclePrevButton.Value, TargetPortal.gamepadCycleNextButton.Value), "Cycle portals");
 			AddHintRow(BoundPair(TargetPortal.gamepadFavoritePrevButton.Value, TargetPortal.gamepadFavoriteNextButton.Value), "Cycle favorites");
-			AddHintRow(Bound(TargetPortal.gamepadIconToggleButton.Value), "Toggle portal icons");
+			AddHintRow(Bound(TargetPortal.gamepadMapPinsButton.Value), "Toggle map pins");
 			AddHintRow(BoundPair("JoyMapZoomIn", "JoyMapZoomOut"), "Zoom");
 			AddHintRow(Bound("JoyButtonB"), "Close map");
 		}
@@ -444,7 +501,7 @@ public static class Map
 		{
 			AddHintRow("Left click", "Travel");
 			AddHintRow("Right click", "Toggle favorite");
-			AddHintRow(TargetPortal.mapPortalIconKey.Value.MainKey is KeyCode.None ? "" : TargetPortal.mapPortalIconKey.Value.ToString(), "Toggle portal icons");
+			AddHintRow(TargetPortal.mapPinsToggleKey.Value.MainKey is KeyCode.None ? "" : TargetPortal.mapPinsToggleKey.Value.ToString(), "Toggle map pins");
 			AddHintRow(BoundPair("MapZoomIn", "MapZoomOut"), "Zoom");
 			AddHintRow(Bound("Map"), "Close map");
 		}
@@ -694,6 +751,10 @@ public static class Map
 			{
 				ToggleFavoritePortal(portalZDO!);
 			}
+			if (GamepadPressed(TargetPortal.gamepadMapPinsButton))
+			{
+				ToggleMapPins();
+			}
 
 			// Leave vanilla's pin type selector inert rather than half usable: the
 			// favorites bindings take over the d-pad axis it is navigated with, and
@@ -717,6 +778,11 @@ public static class Map
 			if (IconTogglePossible() && Player.m_localPlayer.GetComponent<PlayerController>().TakeInput() && (TargetPortal.mapPortalIconKey.Value.IsDown() || GamepadPressed(TargetPortal.gamepadIconToggleButton)))
 			{
 				TogglePortalPins();
+			}
+
+			if (Teleporting && TargetPortal.mapPinsToggleKey.Value.IsDown() && Player.m_localPlayer.GetComponent<PlayerController>().TakeInput())
+			{
+				ToggleMapPins();
 			}
 
 			// Rebuild if the player switched between controller and mouse mid-selection.
