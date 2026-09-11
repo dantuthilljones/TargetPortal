@@ -423,7 +423,12 @@ public static class Map
 			? direction > 0 ? 0 : portals.Count - 1
 			: ((gamepadSelection + direction) % portals.Count + portals.Count) % portals.Count;
 
-		Minimap.instance.CenterMap(portals[gamepadSelection].m_pos);
+		// Move the view by the offset vanilla itself pans with, NOT by calling CenterMap:
+		// UpdateMap recalculates CenterMap(player position + m_mapOffset) every frame, so
+		// a direct CenterMap call is overwritten before it is ever drawn. ShowPointOnMap
+		// sets the same offset but also re-enters map mode and sets an input delay, which
+		// makes repeated cycling feel unresponsive.
+		Minimap.instance.m_mapOffset = portals[gamepadSelection].m_pos - Player.m_localPlayer.transform.position;
 	}
 
 	// Reads a gamepad button and consumes the press, so vanilla does not also act on it
