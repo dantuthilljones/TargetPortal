@@ -25,6 +25,9 @@ public static class Map
 	private static int gamepadSelection = -1;
 	private static Minimap.PinData? gamepadFocus;
 	private static readonly List<FavoriteEntry> favoriteEntries = new();
+	private static GameObject hintPanel = null!;
+	private static readonly List<GameObject> hiddenVanillaHints = new();
+	private static bool hintsBuiltForGamepad;
 
 	private class FavoriteEntry
 	{
@@ -116,6 +119,7 @@ public static class Map
 		Teleporting = false;
 		gamepadSelection = -1;
 		gamepadFocus = null;
+		HidePortalHints();
 
 		if (!shouldPortalsBeVisible)
 		{
@@ -197,6 +201,13 @@ public static class Map
 			if (mode != Minimap.MapMode.Large)
 			{
 				CancelTeleport();
+			}
+			else if (Teleporting)
+			{
+				// SetMapMode re-enables every vanilla hint row, so re-apply ours. This
+				// is also what puts the panel up in the first place, since entering a
+				// portal reaches here via ShowPointOnMap.
+				ShowPortalHints();
 			}
 		}
 	}
@@ -326,7 +337,138 @@ public static class Map
 			rect.sizeDelta = new Vector2(200, 500);
 			rect.pivot = new Vector2(0, 0.5f);
 			favoriteList.AddComponent<VerticalLayoutGroup>().childForceExpandHeight = false;
+
+			hintPanel = new GameObject("TargetPortal Hints")
+			{
+				transform =
+				{
+					parent = __instance.m_largeRoot.transform,
+				},
+			};
+
+			RectTransform hintRect = hintPanel.AddComponent<RectTransform>();
+			hintRect.anchorMin = new Vector2(0, 0);
+			hintRect.anchorMax = new Vector2(0, 0);
+			hintRect.anchoredPosition = new Vector2(15, 15);
+			hintRect.sizeDelta = new Vector2(300, 200);
+			hintRect.pivot = new Vector2(0, 0);
+			hintPanel.AddComponent<VerticalLayoutGroup>().childForceExpandHeight = false;
+			hintPanel.SetActive(false);
 		}
+	}
+
+	// While choosing a portal, most of the vanilla map actions (add pin, remove pin,
+	// ping, shared map) do nothing, and none of the controller bindings this mod adds
+	// are listed. Hide vanilla's rows wholesale and render a panel describing what is
+	// actually available instead.
+	private static void ShowPortalHints()
+	{
+		if (!hintPanel)
+		{
+			return;
+		}
+
+		foreach (GameObject hint in Minimap.instance.m_hints)
+		{
+			// Records rows enabled since the last call, so this stays correct when
+			// SetMapMode re-enables them underneath us, and leaves rows alone entirely
+			// when the player has key hints switched off.
+			if (hint && hint.activeSelf && !hiddenVanillaHints.Contains(hint))
+			{
+				hiddenVanillaHints.Add(hint);
+			}
+		}
+
+		foreach (GameObject hint in hiddenVanillaHints)
+		{
+			if (hint)
+			{
+				hint.SetActive(false);
+			}
+		}
+
+		BuildHintRows();
+		hintPanel.SetActive(true);
+	}
+
+	private static void HidePortalHints()
+	{
+		if (!hintPanel)
+		{
+			return;
+		}
+
+		foreach (GameObject hint in hiddenVanillaHints)
+		{
+			if (hint)
+			{
+				hint.SetActive(true);
+			}
+		}
+
+		hiddenVanillaHints.Clear();
+		hintPanel.SetActive(false);
+	}
+
+	// Valheim resolves an action name to whatever the player has bound, including the
+	// correct glyph for their controller type, so nothing here hardcodes a button face.
+	private static string Bound(string action) => action.Length > 0 && ZInput.instance is { } input ? input.GetBoundKeyString(action, true) : "";
+
+	private static string BoundPair(string first, string second)
+	{
+		string a = Bound(first);
+		string b = Bound(second);
+		return a.Length > 0 && b.Length > 0 ? $"{a} / {b}" : a + b;
+	}
+
+	private static void BuildHintRows()
+	{
+		for (int i = 0; i < hintPanel.transform.childCount; ++i)
+		{
+			Object.Destroy(hintPanel.transform.GetChild(i).gameObject);
+		}
+
+		hintsBuiltForGamepad = ZInput.IsGamepadActive();
+
+		if (hintsBuiltForGamepad)
+		{
+			AddHintRow(Bound(TargetPortal.gamepadTravelButton.Value), "Travel");
+			AddHintRow(Bound(TargetPortal.gamepadFavoriteButton.Value), "Toggle favorite");
+			AddHintRow(BoundPair(TargetPortal.gamepadCyclePrevButton.Value, TargetPortal.gamepadCycleNextButton.Value), "Cycle portals");
+			AddHintRow(BoundPair(TargetPortal.gamepadFavoritePrevButton.Value, TargetPortal.gamepadFavoriteNextButton.Value), "Cycle favorites");
+			AddHintRow(Bound(TargetPortal.gamepadIconToggleButton.Value), "Toggle portal icons");
+			AddHintRow(BoundPair("JoyMapZoomIn", "JoyMapZoomOut"), "Zoom");
+			AddHintRow(Bound("JoyButtonB"), "Close map");
+		}
+		else
+		{
+			AddHintRow("Left click", "Travel");
+			AddHintRow("Right click", "Toggle favorite");
+			AddHintRow(TargetPortal.mapPortalIconKey.Value.MainKey is KeyCode.None ? "" : TargetPortal.mapPortalIconKey.Value.ToString(), "Toggle portal icons");
+			AddHintRow(BoundPair("MapZoomIn", "MapZoomOut"), "Zoom");
+			AddHintRow(Bound("Map"), "Close map");
+		}
+	}
+
+	private static void AddHintRow(string keys, string description)
+	{
+		// An unbound or unresolvable action simply does not get a row.
+		if (keys.Length == 0)
+		{
+			return;
+		}
+
+		GameObject row = Object.Instantiate(Minimap.instance.m_largeRoot.transform.Find("KeyHints/keyboard_hints/AddPin").gameObject, hintPanel.transform);
+		// The row being cloned is one of the vanilla hints that was just deactivated,
+		// and Instantiate copies that state, so activate the clone explicitly.
+		row.SetActive(true);
+		row.GetComponent<HorizontalLayoutGroup>().childAlignment = TextAnchor.MiddleLeft;
+		row.transform.Find("keyboard_hint").gameObject.SetActive(false);
+
+		Transform label = row.transform.Find("Label");
+		label.SetAsLastSibling();
+		label.GetComponent<RectTransform>().pivot = new Vector2(0, 0.5f);
+		label.GetComponent<TextMeshProUGUI>().text = $"<color=yellow>{keys}</color>  {description}";
 	}
 
 	private static void ClearFavorites()
@@ -354,6 +496,9 @@ public static class Map
 				if (pins.TryGetValue(portal, out Minimap.PinData pin))
 				{
 					GameObject favoriteEntry = Object.Instantiate(Minimap.instance.m_largeRoot.transform.Find("KeyHints/keyboard_hints/AddPin").gameObject, favoriteList.transform);
+					// The row being cloned is a vanilla key hint, which is deactivated
+					// while choosing a portal, so activate the clone explicitly.
+					favoriteEntry.SetActive(true);
 					favoriteEntry.GetComponent<HorizontalLayoutGroup>().childAlignment = TextAnchor.MiddleLeft;
 					Transform label = favoriteEntry.transform.Find("Label");
 					label.SetAsLastSibling();
@@ -494,16 +639,21 @@ public static class Map
 	// Reads a gamepad button and consumes the press, so vanilla does not also act on it
 	// later in the same frame - JoyButtonA would otherwise drop a map pin on top of
 	// teleporting, and the bumpers would cycle the pin icon selection.
-	private static bool GamepadPressed(ConfigEntry<string> button)
+	private static bool GamepadPressed(ConfigEntry<string> button) => GamepadPressed(button.Value);
+
+	private static bool GamepadPressed(string button)
 	{
-		if (!ZInput.IsGamepadActive() || button.Value.Length == 0 || !ZInput.GetButtonDown(button.Value))
+		if (!ZInput.IsGamepadActive() || button.Length == 0 || !ZInput.GetButtonDown(button))
 		{
 			return false;
 		}
 
-		ZInput.ResetButtonStatus(button.Value);
+		ZInput.ResetButtonStatus(button);
 		return true;
 	}
+
+	// Vanilla's pin type selector on the map, driven by these while the map is open.
+	private static readonly string[] iconSelectorButtons = { "JoyDPadUp", "JoyDPadDown", "JoyDPadRight" };
 
 	// Valheim handles gamepad map input inline in Minimap.UpdateMap rather than through
 	// OnMapLeftClick/RemovePinUnderPointer, so none of the click patches above ever fire
@@ -544,6 +694,16 @@ public static class Map
 			{
 				ToggleFavoritePortal(portalZDO!);
 			}
+
+			// Leave vanilla's pin type selector inert rather than half usable: the
+			// favorites bindings take over the d-pad axis it is navigated with, and
+			// toggling a filter there fights the "hide map pins" option, which restores
+			// its own filter state once the selection ends. Anything the bindings above
+			// already consumed is a no-op here, so this also covers those being rebound.
+			foreach (string iconSelectorButton in iconSelectorButtons)
+			{
+				GamepadPressed(iconSelectorButton);
+			}
 		}
 	}
 
@@ -557,6 +717,12 @@ public static class Map
 			if (IconTogglePossible() && Player.m_localPlayer.GetComponent<PlayerController>().TakeInput() && (TargetPortal.mapPortalIconKey.Value.IsDown() || GamepadPressed(TargetPortal.gamepadIconToggleButton)))
 			{
 				TogglePortalPins();
+			}
+
+			// Rebuild if the player switched between controller and mouse mid-selection.
+			if (Teleporting && hintsBuiltForGamepad != ZInput.IsGamepadActive())
+			{
+				BuildHintRows();
 			}
 
 			if (Teleporting && TargetPortal.showPlayersDuringPortal.Value == TargetPortal.Toggle.On)
