@@ -23,6 +23,15 @@ public static class Map
 	private static bool[]? visibleIconTypes;
 	private static GameObject favoriteList = null!;
 	private static int gamepadSelection = -1;
+	private static Minimap.PinData? gamepadFocus;
+	private static readonly List<FavoriteEntry> favoriteEntries = new();
+
+	private class FavoriteEntry
+	{
+		public Minimap.PinData Pin = null!;
+		public TextMeshProUGUI Label = null!;
+		public Color BaseColor;
+	}
 
 	[HarmonyPatch(typeof(TeleportWorldTrigger), nameof(TeleportWorldTrigger.OnTriggerEnter))]
 	private class OpenMapOnPortalEnter
@@ -106,6 +115,7 @@ public static class Map
 	{
 		Teleporting = false;
 		gamepadSelection = -1;
+		gamepadFocus = null;
 
 		if (!shouldPortalsBeVisible)
 		{
@@ -321,6 +331,8 @@ public static class Map
 
 	private static void ClearFavorites()
 	{
+		favoriteEntries.Clear();
+
 		for (int i = 0; i < favoriteList.transform.childCount; ++i)
 		{
 			Object.Destroy(favoriteList.transform.GetChild(i).gameObject);
@@ -345,14 +357,62 @@ public static class Map
 					favoriteEntry.GetComponent<HorizontalLayoutGroup>().childAlignment = TextAnchor.MiddleLeft;
 					Transform label = favoriteEntry.transform.Find("Label");
 					label.SetAsLastSibling();
-					label.GetComponent<TextMeshProUGUI>().text = pin.m_name;
+					TextMeshProUGUI labelText = label.GetComponent<TextMeshProUGUI>();
+					labelText.text = pin.m_name;
 					label.GetComponent<RectTransform>().pivot = new Vector2(0, 0.5f);
 					Image portalIcon = favoriteEntry.transform.Find("keyboard_hint").GetComponent<Image>();
 					portalIcon.sprite = pin.m_icon;
 					portalIcon.gameObject.AddComponent<FavoriteClicked>().Pin = pin;
+
+					favoriteEntries.Add(new FavoriteEntry
+					{
+						Pin = pin,
+						Label = labelText,
+						BaseColor = labelText.color,
+					});
 				}
 			}
 		}
+
+		// The list is rebuilt whenever a portal is favorited, so restore the highlight.
+		RefreshFavoriteHighlight();
+	}
+
+	// Highlights whichever favorite the gamepad currently has centered, if any. Also
+	// covers the case where cycling with the bumpers happens to land on a favorite.
+	private static void RefreshFavoriteHighlight()
+	{
+		foreach (FavoriteEntry entry in favoriteEntries)
+		{
+			entry.Label.color = entry.Pin == gamepadFocus ? Color.yellow : entry.BaseColor;
+		}
+	}
+
+	// Centers the map on a portal by moving the offset vanilla pans with. See
+	// CyclePortalSelection for why this is not a CenterMap call.
+	private static void FocusPortal(Minimap.PinData pin)
+	{
+		gamepadFocus = pin;
+		Minimap.instance.m_mapOffset = pin.m_pos - Player.m_localPlayer.transform.position;
+		RefreshFavoriteHighlight();
+	}
+
+	// Steps through the favorites list. The index is derived from what is currently
+	// focused rather than stored, so switching between the bumpers and this stays
+	// coherent and a rebuilt list cannot leave a stale index behind.
+	private static void CycleFavoriteSelection(int direction)
+	{
+		if (favoriteEntries.Count == 0)
+		{
+			return;
+		}
+
+		int current = favoriteEntries.FindIndex(e => e.Pin == gamepadFocus);
+		int next = current < 0
+			? direction > 0 ? 0 : favoriteEntries.Count - 1
+			: ((current + direction) % favoriteEntries.Count + favoriteEntries.Count) % favoriteEntries.Count;
+
+		FocusPortal(favoriteEntries[next].Pin);
 	}
 
 	private class FavoriteClicked : MonoBehaviour, IPointerClickHandler
@@ -423,12 +483,12 @@ public static class Map
 			? direction > 0 ? 0 : portals.Count - 1
 			: ((gamepadSelection + direction) % portals.Count + portals.Count) % portals.Count;
 
-		// Move the view by the offset vanilla itself pans with, NOT by calling CenterMap:
-		// UpdateMap recalculates CenterMap(player position + m_mapOffset) every frame, so
-		// a direct CenterMap call is overwritten before it is ever drawn. ShowPointOnMap
-		// sets the same offset but also re-enters map mode and sets an input delay, which
-		// makes repeated cycling feel unresponsive.
-		Minimap.instance.m_mapOffset = portals[gamepadSelection].m_pos - Player.m_localPlayer.transform.position;
+		// FocusPortal moves the view by the offset vanilla itself pans with, NOT by
+		// calling CenterMap: UpdateMap recalculates CenterMap(player position +
+		// m_mapOffset) every frame, so a direct CenterMap call is overwritten before it
+		// is ever drawn. ShowPointOnMap sets the same offset but also re-enters map mode
+		// and sets an input delay, which makes repeated cycling feel unresponsive.
+		FocusPortal(portals[gamepadSelection]);
 	}
 
 	// Reads a gamepad button and consumes the press, so vanilla does not also act on it
@@ -465,6 +525,14 @@ public static class Map
 			if (GamepadPressed(TargetPortal.gamepadCycleNextButton))
 			{
 				CyclePortalSelection(1);
+			}
+			if (GamepadPressed(TargetPortal.gamepadFavoritePrevButton))
+			{
+				CycleFavoriteSelection(-1);
+			}
+			if (GamepadPressed(TargetPortal.gamepadFavoriteNextButton))
+			{
+				CycleFavoriteSelection(1);
 			}
 			if (GamepadPressed(TargetPortal.gamepadTravelButton))
 			{

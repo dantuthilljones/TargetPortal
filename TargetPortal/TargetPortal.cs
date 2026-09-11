@@ -46,6 +46,8 @@ public class TargetPortal : BaseUnityPlugin
 	public static ConfigEntry<string> gamepadFavoriteButton = null!;
 	public static ConfigEntry<string> gamepadCycleNextButton = null!;
 	public static ConfigEntry<string> gamepadCyclePrevButton = null!;
+	public static ConfigEntry<string> gamepadFavoritePrevButton = null!;
+	public static ConfigEntry<string> gamepadFavoriteNextButton = null!;
 	public static ConfigEntry<string> gamepadIconToggleButton = null!;
 	private static ConfigEntry<string> gamepadPortalModeButton = null!;
 
@@ -105,6 +107,8 @@ public class TargetPortal : BaseUnityPlugin
 		gamepadFavoriteButton = config("2 - Controller", "Favorite button", "JoyButtonX", new ConfigDescription($"Button to toggle the portal under the map crosshair as a favorite. {gamepadHint}"), false);
 		gamepadCyclePrevButton = config("2 - Controller", "Previous portal button", "JoyTabLeft", new ConfigDescription($"Button to center the map on the previous portal while choosing a target. {gamepadHint}"), false);
 		gamepadCycleNextButton = config("2 - Controller", "Next portal button", "JoyTabRight", new ConfigDescription($"Button to center the map on the next portal while choosing a target. {gamepadHint}"), false);
+		gamepadFavoritePrevButton = config("2 - Controller", "Previous favorite button", "JoyDPadUp", new ConfigDescription($"Button to move up the favorites list while choosing a target. {gamepadHint}"), false);
+		gamepadFavoriteNextButton = config("2 - Controller", "Next favorite button", "JoyDPadDown", new ConfigDescription($"Button to move down the favorites list while choosing a target. {gamepadHint}"), false);
 		gamepadIconToggleButton = config("2 - Controller", "Toggle icons button", "JoyDPadLeft", new ConfigDescription($"Button to toggle portal icons on the map, the controller equivalent of the icon hotkey. {gamepadHint}"), false);
 		gamepadPortalModeButton = config("2 - Controller", "Modifier for toggle", "JoyAltKeys", new ConfigDescription($"Button that has to be held while interacting with a portal to toggle its mode, the controller equivalent of the modifier key. {gamepadHint}"), false);
 
