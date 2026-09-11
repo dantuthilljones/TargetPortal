@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using BepInEx.Configuration;
 using Groups;
 using HarmonyLib;
 using TMPro;
@@ -21,6 +22,7 @@ public static class Map
 	private static bool shouldPortalsBeVisible = false;
 	private static bool[]? visibleIconTypes;
 	private static GameObject favoriteList = null!;
+	private static int gamepadSelection = -1;
 
 	[HarmonyPatch(typeof(TeleportWorldTrigger), nameof(TeleportWorldTrigger.OnTriggerEnter))]
 	private class OpenMapOnPortalEnter
@@ -103,6 +105,7 @@ public static class Map
 	public static void CancelTeleport()
 	{
 		Teleporting = false;
+		gamepadSelection = -1;
 
 		if (!shouldPortalsBeVisible)
 		{
@@ -145,6 +148,13 @@ public static class Map
 		return false;
 	}
 
+	// Where the player is currently pointing on the map. Valheim has no gamepad cursor:
+	// with a gamepad the map itself is panned under a fixed crosshair at the center of
+	// the screen, which is how vanilla resolves map clicks in Minimap.UpdateMap too.
+	private static Vector3 CursorScreenPos() => ZInput.IsMouseActive()
+		? ZInput.pointerPosition
+		: new Vector3(Screen.width / 2f, Screen.height / 2f, 0f);
+
 	private static bool GetClosestPortal(out Minimap.PinData? closestPin, out ZDO? portalZDO)
 	{
 		foreach (Minimap.PinData pinData in activePins.Keys)
@@ -153,7 +163,7 @@ public static class Map
 		}
 
 		Minimap Minimap = Minimap.instance;
-		closestPin = Minimap.GetClosestPin(Minimap.ScreenToWorldPoint(Input.mousePosition), Minimap.m_removeRadius * (Minimap.m_largeZoom * 2f));
+		closestPin = Minimap.GetClosestPin(Minimap.ScreenToWorldPoint(CursorScreenPos()), Minimap.m_removeRadius * (Minimap.m_largeZoom * 2f));
 
 		foreach (Minimap.PinData pinData in activePins.Keys)
 		{
@@ -369,25 +379,111 @@ public static class Map
 		}
 	}
 
+	private static bool IconTogglePossible() => TargetPortal.allowIconToggleWithoutMap.Value == TargetPortal.Toggle.On
+		? Minimap.instance.m_mode != Minimap.MapMode.None
+		: Minimap.instance.m_mode == Minimap.MapMode.Large;
+
+	private static void TogglePortalPins()
+	{
+		if (!Teleporting)
+		{
+			if (shouldPortalsBeVisible)
+			{
+				RemovePortalPins();
+			}
+			else
+			{
+				AddPortalPins();
+			}
+		}
+		shouldPortalsBeVisible = !shouldPortalsBeVisible;
+	}
+
+	// Portals ordered by distance from the player, so cycling walks outwards from
+	// wherever the player is standing rather than in ZDO order.
+	private static List<Minimap.PinData> PortalsByDistance()
+	{
+		Vector3 origin = Player.m_localPlayer.transform.position;
+		return activePins.Keys.OrderBy(p => Vector3.Distance(origin, p.m_pos)).ToList();
+	}
+
+	// Steps the selection and centers the map on it. Because the gamepad cursor is the
+	// center of the screen, centering the map puts the selected portal under the
+	// crosshair - so the normal "closest portal to the cursor" lookup then picks it up
+	// and no separate selection state is needed at travel time.
+	private static void CyclePortalSelection(int direction)
+	{
+		List<Minimap.PinData> portals = PortalsByDistance();
+		if (portals.Count == 0)
+		{
+			return;
+		}
+
+		gamepadSelection = gamepadSelection < 0
+			? direction > 0 ? 0 : portals.Count - 1
+			: ((gamepadSelection + direction) % portals.Count + portals.Count) % portals.Count;
+
+		Minimap.instance.CenterMap(portals[gamepadSelection].m_pos);
+	}
+
+	// Reads a gamepad button and consumes the press, so vanilla does not also act on it
+	// later in the same frame - JoyButtonA would otherwise drop a map pin on top of
+	// teleporting, and the bumpers would cycle the pin icon selection.
+	private static bool GamepadPressed(ConfigEntry<string> button)
+	{
+		if (!ZInput.IsGamepadActive() || button.Value.Length == 0 || !ZInput.GetButtonDown(button.Value))
+		{
+			return false;
+		}
+
+		ZInput.ResetButtonStatus(button.Value);
+		return true;
+	}
+
+	// Valheim handles gamepad map input inline in Minimap.UpdateMap rather than through
+	// OnMapLeftClick/RemovePinUnderPointer, so none of the click patches above ever fire
+	// on a controller. Hook UpdateMap and act before vanilla does.
+	[HarmonyPatch(typeof(Minimap), nameof(Minimap.UpdateMap))]
+	private static class GamepadPortalInput
+	{
+		private static void Prefix(bool takeInput)
+		{
+			if (!takeInput || !Teleporting)
+			{
+				return;
+			}
+
+			if (GamepadPressed(TargetPortal.gamepadCyclePrevButton))
+			{
+				CyclePortalSelection(-1);
+			}
+			if (GamepadPressed(TargetPortal.gamepadCycleNextButton))
+			{
+				CyclePortalSelection(1);
+			}
+			if (GamepadPressed(TargetPortal.gamepadTravelButton))
+			{
+				// Travelling ends the session and clears the pins, so stop here.
+				HandlePortalClick(GetClosestPortal);
+				return;
+			}
+			if (GamepadPressed(TargetPortal.gamepadFavoriteButton) && GetClosestPortal(out _, out ZDO? portalZDO))
+			{
+				ToggleFavoritePortal(portalZDO!);
+			}
+		}
+	}
+
 	[HarmonyPatch(typeof(Minimap), nameof(Minimap.Update))]
 	private static class TogglePortalIcons
 	{
 		private static void Prefix(Minimap __instance)
 		{
-			if ((TargetPortal.allowIconToggleWithoutMap.Value == TargetPortal.Toggle.On ? Minimap.instance.m_mode != Minimap.MapMode.None : Minimap.instance.m_mode == Minimap.MapMode.Large) && TargetPortal.mapPortalIconKey.Value.IsDown() && Player.m_localPlayer.GetComponent<PlayerController>().TakeInput())
+			// TakeInput is checked before GamepadPressed, which consumes the press: with
+			// the order reversed a blocked frame would swallow the button silently.
+			if (IconTogglePossible() && Player.m_localPlayer.GetComponent<PlayerController>().TakeInput() && (TargetPortal.mapPortalIconKey.Value.IsDown() || GamepadPressed(TargetPortal.gamepadIconToggleButton)))
 			{
-				if (!Teleporting)
-				{
-					if (shouldPortalsBeVisible)
-					{
-						RemovePortalPins();
-					}
-					else
-					{
-						AddPortalPins();
-					}
-				}
-				shouldPortalsBeVisible = !shouldPortalsBeVisible;
+				TogglePortalPins();
 			}
 
 			if (Teleporting && TargetPortal.showPlayersDuringPortal.Value == TargetPortal.Toggle.On)
