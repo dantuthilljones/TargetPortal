@@ -246,6 +246,10 @@ public static class Map
 				// portal reaches here via ShowPointOnMap.
 				ShowPortalSelectionUi();
 			}
+			else
+			{
+				RefreshPortalIconHint();
+			}
 		}
 	}
 
@@ -507,17 +511,19 @@ public static class Map
 		}
 	}
 
-	private static void AddHintRow(string keys, string description)
+	private static void AddHintRow(string keys, string description) => CreateHintRow(hintPanel.transform, keys, description);
+
+	private static GameObject? CreateHintRow(Transform parent, string keys, string description)
 	{
 		// An unbound or unresolvable action simply does not get a row.
 		if (keys.Length == 0)
 		{
-			return;
+			return null;
 		}
 
-		GameObject row = Object.Instantiate(Minimap.instance.m_largeRoot.transform.Find("KeyHints/keyboard_hints/AddPin").gameObject, hintPanel.transform);
-		// The row being cloned is one of the vanilla hints that was just deactivated,
-		// and Instantiate copies that state, so activate the clone explicitly.
+		GameObject row = Object.Instantiate(Minimap.instance.m_largeRoot.transform.Find("KeyHints/keyboard_hints/AddPin").gameObject, parent);
+		// The row being cloned is one of the vanilla hints that gets deactivated during
+		// portal selection, and Instantiate copies that state, so activate it explicitly.
 		row.SetActive(true);
 		row.GetComponent<HorizontalLayoutGroup>().childAlignment = TextAnchor.MiddleLeft;
 		row.transform.Find("keyboard_hint").gameObject.SetActive(false);
@@ -526,6 +532,54 @@ public static class Map
 		label.SetAsLastSibling();
 		label.GetComponent<RectTransform>().pivot = new Vector2(0, 0.5f);
 		label.GetComponent<TextMeshProUGUI>().text = $"<color=yellow>{keys}</color>  {description}";
+		return row;
+	}
+
+	// The portal icon toggle acts on the normal map, not on portal selection, so its
+	// hint belongs among vanilla's own rows. Valheim keeps one group of rows per input
+	// device under KeyHints and shows whichever matches, so putting a row in each group
+	// gets the right one displayed without any device checks here. These rows sit
+	// inside the container that portal selection hides, so they correctly disappear
+	// while a portal is being chosen.
+	private static readonly Dictionary<string, GameObject> iconHintRows = new();
+	private static string builtIconHintKeys = "";
+
+	private static void RefreshPortalIconHint()
+	{
+		if (Minimap.instance.m_largeRoot.transform.Find("KeyHints") is not { } keyHints)
+		{
+			return;
+		}
+
+		string keyboardKeys = TargetPortal.mapPortalIconKey.Value.MainKey is KeyCode.None ? "" : TargetPortal.mapPortalIconKey.Value.ToString();
+		string gamepadKeys = Bound(TargetPortal.gamepadIconToggleButton.Value);
+		string signature = $"{keyboardKeys}|{gamepadKeys}";
+
+		// Rebuilt only when a binding changed, or when the rows have gone away, so
+		// opening the map repeatedly does not churn through clones.
+		if (signature == builtIconHintKeys && iconHintRows.Count > 0 && iconHintRows.Values.All(row => row))
+		{
+			return;
+		}
+
+		builtIconHintKeys = signature;
+		SetPortalIconHintRow(keyHints, "keyboard_hints", keyboardKeys);
+		SetPortalIconHintRow(keyHints, "gamepad_hints", gamepadKeys);
+	}
+
+	private static void SetPortalIconHintRow(Transform keyHints, string group, string keys)
+	{
+		if (iconHintRows.TryGetValue(group, out GameObject existing) && existing)
+		{
+			Object.Destroy(existing);
+		}
+
+		iconHintRows.Remove(group);
+
+		if (keyHints.Find(group) is { } container && CreateHintRow(container, keys, "Toggle portal icons") is { } row)
+		{
+			iconHintRows[group] = row;
+		}
 	}
 
 	private static void ClearFavorites()
@@ -647,17 +701,15 @@ public static class Map
 
 	private static void TogglePortalPins()
 	{
-		if (!Teleporting)
+		if (shouldPortalsBeVisible)
 		{
-			if (shouldPortalsBeVisible)
-			{
-				RemovePortalPins();
-			}
-			else
-			{
-				AddPortalPins();
-			}
+			RemovePortalPins();
 		}
+		else
+		{
+			AddPortalPins();
+		}
+
 		shouldPortalsBeVisible = !shouldPortalsBeVisible;
 	}
 
@@ -775,7 +827,11 @@ public static class Map
 		{
 			// TakeInput is checked before GamepadPressed, which consumes the press: with
 			// the order reversed a blocked frame would swallow the button silently.
-			if (IconTogglePossible() && Player.m_localPlayer.GetComponent<PlayerController>().TakeInput() && (TargetPortal.mapPortalIconKey.Value.IsDown() || GamepadPressed(TargetPortal.gamepadIconToggleButton)))
+			// Ignored entirely while choosing a portal, where portal pins are always
+			// shown. Previously the press still flipped the hidden on/off state, which
+			// inverted what the button meant afterwards and could leave portal icons
+			// switched on over the normal map.
+			if (!Teleporting && IconTogglePossible() && Player.m_localPlayer.GetComponent<PlayerController>().TakeInput() && (TargetPortal.mapPortalIconKey.Value.IsDown() || GamepadPressed(TargetPortal.gamepadIconToggleButton)))
 			{
 				TogglePortalPins();
 			}
