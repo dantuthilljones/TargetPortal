@@ -40,8 +40,18 @@ public class TargetPortal : BaseUnityPlugin
 	public static ConfigEntry<IgnoreItems> ignoreItemsTeleport = null!;
 	private static ConfigEntry<KeyboardShortcut> portalModeToggleModifierKey = null!;
 	public static ConfigEntry<KeyboardShortcut> mapPortalIconKey = null!;
+	public static ConfigEntry<KeyboardShortcut> mapPinsToggleKey = null!;
 	private static ConfigEntry<PortalMode> defaultPortalMode = null!;
 	public static ConfigEntry<Toggle> allowIconToggleWithoutMap = null!;
+	public static ConfigEntry<string> gamepadTravelButton = null!;
+	public static ConfigEntry<string> gamepadFavoriteButton = null!;
+	public static ConfigEntry<string> gamepadCycleNextButton = null!;
+	public static ConfigEntry<string> gamepadCyclePrevButton = null!;
+	public static ConfigEntry<string> gamepadFavoritePrevButton = null!;
+	public static ConfigEntry<string> gamepadFavoriteNextButton = null!;
+	public static ConfigEntry<string> gamepadMapPinsButton = null!;
+	public static ConfigEntry<string> gamepadIconToggleButton = null!;
+	private static ConfigEntry<string> gamepadPortalModeButton = null!;
 
 	private ConfigEntry<T> config<T>(string group, string name, T value, ConfigDescription description, bool synchronizedSetting = true)
 	{
@@ -88,11 +98,23 @@ public class TargetPortal : BaseUnityPlugin
 		showPlayersDuringPortal = config("1 - General", "Show player pins", Toggle.On, "If on, all player map pins will be shown on the map that lets you select a target portal.", false);
 		portalAnimation = config("1 - General", "Portal Animation", Toggle.On, "If on, portals will display their whirling animation while a player is infront of them.", false);
 		mapPortalIconKey = config("1 - General", "Hotkey map icons", new KeyboardShortcut(KeyCode.P), "Hotkey to press while the map is open to toggle portal icons.", false);
+		mapPinsToggleKey = config("1 - General", "Hotkey map pins", new KeyboardShortcut(KeyCode.H), "Hotkey to press while choosing a target portal, to show or hide your other map pins.", false);
 		portalNameLength = config("1 - General", "Maximum length for portal names", 10, new ConfigDescription("Maximum length for portal names.", new AcceptableValueRange<int>(5, 100)));
 		maximumNumberOfPortals = config("1 - General", "Maximum number of portals", 0, new ConfigDescription("Sets the maximum number of portals allowed in the world. Use 0 for no limit."));
 		ignoreItemsTeleport = config("1 - General", "Ignore item teleport restrictions", IgnoreItems.Default, new ConfigDescription("Never: Do not allow teleportation of restricted items.\nDefault: Keep vanilla behavior for portals.\nAlways: Ignore item restrictions on portals."));
 		defaultPortalMode = config("1 - General", "Default Portal mode", PortalMode.Private, new ConfigDescription("Sets the default mode for newly built portals."), false);
 		allowIconToggleWithoutMap = config("1 - General", "Allow Icon toggle map closed", Toggle.Off, new ConfigDescription("If on, the portal icons can be toggled on and off with the hotkey, even if the map is not opened."), false);
+
+		const string gamepadHint = "Valheim gamepad button name, e.g. JoyButtonA, JoyButtonX, JoyTabLeft, JoyDPadLeft. Leave empty to unbind.";
+		gamepadTravelButton = config("2 - Controller", "Travel button", "JoyButtonA", new ConfigDescription($"Button to travel to the portal under the map crosshair. {gamepadHint}"), false);
+		gamepadFavoriteButton = config("2 - Controller", "Favorite button", "JoyButtonX", new ConfigDescription($"Button to toggle the portal under the map crosshair as a favorite. {gamepadHint}"), false);
+		gamepadCyclePrevButton = config("2 - Controller", "Previous portal button", "JoyTabLeft", new ConfigDescription($"Button to center the map on the previous portal while choosing a target. {gamepadHint}"), false);
+		gamepadCycleNextButton = config("2 - Controller", "Next portal button", "JoyTabRight", new ConfigDescription($"Button to center the map on the next portal while choosing a target. {gamepadHint}"), false);
+		gamepadFavoritePrevButton = config("2 - Controller", "Previous favorite button", "JoyDPadUp", new ConfigDescription($"Button to move up the favorites list while choosing a target. {gamepadHint}"), false);
+		gamepadFavoriteNextButton = config("2 - Controller", "Next favorite button", "JoyDPadDown", new ConfigDescription($"Button to move down the favorites list while choosing a target. {gamepadHint}"), false);
+		gamepadMapPinsButton = config("2 - Controller", "Toggle map pins button", "JoyButtonY", new ConfigDescription($"Button to show or hide your other map pins while choosing a target portal. {gamepadHint}"), false);
+		gamepadIconToggleButton = config("2 - Controller", "Toggle icons button", "JoyDPadLeft", new ConfigDescription($"Button to toggle portal icons on the map, the controller equivalent of the icon hotkey. {gamepadHint}"), false);
+		gamepadPortalModeButton = config("2 - Controller", "Modifier for toggle", "JoyAltKeys", new ConfigDescription($"Button that has to be held while interacting with a portal to toggle its mode, the controller equivalent of the modifier key. {gamepadHint}"), false);
 
 		Assembly assembly = Assembly.GetExecutingAssembly();
 		Harmony harmony = new(ModGUID);
@@ -220,12 +242,22 @@ public class TargetPortal : BaseUnityPlugin
 		}
 	}
 
+	// The modifier held alongside Use to cycle a portal's mode. A gamepad has no Shift,
+	// so it gets its own binding; null means the toggle is unbound on the active device.
+	private static string? ModeToggleModifierName() => ZInput.IsGamepadActive()
+		? gamepadPortalModeButton.Value.Length > 0 ? gamepadPortalModeButton.Value : null
+		: portalModeToggleModifierKey.Value.MainKey is KeyCode.None ? null : portalModeToggleModifierKey.Value.ToString();
+
+	private static bool ModeToggleModifierHeld() => ZInput.IsGamepadActive()
+		? gamepadPortalModeButton.Value.Length > 0 && ZInput.GetButton(gamepadPortalModeButton.Value)
+		: Input.GetKey(portalModeToggleModifierKey.Value.MainKey) && portalModeToggleModifierKey.Value.Modifiers.All(Input.GetKey);
+
 	[HarmonyPatch(typeof(TeleportWorld), nameof(TeleportWorld.GetHoverText))]
 	private class OverrideHoverText
 	{
 		public static void Postfix(TeleportWorld __instance, ref string __result)
 		{
-			if (portalModeToggleModifierKey.Value.MainKey is KeyCode.None || allowNonPublicPortals.Value == Toggle.Off || (limitToVanillaPortals.Value == Toggle.On && Utils.GetPrefabName(__instance.gameObject) is not "portal_wood" and not "portal_stone"))
+			if (ModeToggleModifierName() is not { } modifierName || allowNonPublicPortals.Value == Toggle.Off || (limitToVanillaPortals.Value == Toggle.On && Utils.GetPrefabName(__instance.gameObject) is not "portal_wood" and not "portal_stone"))
 			{
 				return;
 			}
@@ -241,7 +273,7 @@ public class TargetPortal : BaseUnityPlugin
 				mode = PortalMode.Private;
 			}
 
-			__result = __result.Replace(Localization.instance.Localize("$piece_portal_connected"), mode + (mode is PortalMode.Public or PortalMode.Admin ? "" : $" (Owner: {__instance.m_nview.GetZDO().GetString("TargetPortal PortalOwnerName")})")) + $"\n[<b><color=yellow>{portalModeToggleModifierKey.Value}</color> + <color=yellow>{Localization.instance.Localize("$KEY_Use")}</color></b>] Toggle Mode";
+			__result = __result.Replace(Localization.instance.Localize("$piece_portal_connected"), mode + (mode is PortalMode.Public or PortalMode.Admin ? "" : $" (Owner: {__instance.m_nview.GetZDO().GetString("TargetPortal PortalOwnerName")})")) + $"\n[<b><color=yellow>{modifierName}</color> + <color=yellow>{Localization.instance.Localize("$KEY_Use")}</color></b>] Toggle Mode";
 		}
 	}
 
@@ -288,7 +320,7 @@ public class TargetPortal : BaseUnityPlugin
 				return true;
 			}
 
-			if (Input.GetKey(portalModeToggleModifierKey.Value.MainKey) && portalModeToggleModifierKey.Value.Modifiers.All(Input.GetKey))
+			if (ModeToggleModifierHeld())
 			{
 				int mode = __instance.m_nview.GetZDO().GetInt("TargetPortal PortalMode");
 				++mode;

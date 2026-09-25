@@ -1,0 +1,209 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Alternative build file, for building with the plain `dotnet` SDK.
+
+  The tracked TargetPortal.csproj is a legacy (packages.config) project that needs
+  Visual Studio / MSBuild.exe plus a pre-generated publicized_assemblies folder.
+  This file builds the exact same sources with the plain `dotnet` SDK instead:
+
+    * Microsoft.NETFramework.ReferenceAssemblies - net48 targeting pack via NuGet,
+      so no .NET Framework Developer Pack install is needed.
+    * BepInEx.AssemblyPublicizer.MSBuild        - publicizes Valheim's assemblies at
+      build time, so no publicized_assemblies folder is needed.
+    * ILRepack.Lib.MSBuild.Task                 - PackageReference instead of
+      packages.config; still picks up ILRepack.targets from this directory.
+
+  Build:   dotnet build TargetPortal/TargetPortal.Local.csproj -c Release
+  Deploy:  automatic, into the Thunderstore Mod Manager profile (see Deploy target).
+           Override with -p:PluginDeployPath=... or skip with -p:SkipDeploy=true
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net48</TargetFramework>
+        <AssemblyName>TargetPortal</AssemblyName>
+        <RootNamespace>TargetPortal</RootNamespace>
+        <LangVersion>latest</LangVersion>
+        <Nullable>enable</Nullable>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+        <!-- Properties/AssemblyInfo.cs already declares the assembly attributes. -->
+        <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+        <GenerateDocumentationFile>false</GenerateDocumentationFile>
+        <!-- A ref assembly would confuse the ILRepack step. -->
+        <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+
+        <!-- Valheim 1.0 runs Unity 6 on Mono with a netstandard 2.1 surface, which is
+             NOT what the net48 targeting pack describes (its facades dead-end on types
+             like System.ReadOnlySpan). Compile against the game's own corlib instead,
+             so the compile-time surface matches what actually executes. The net48
+             targeting pack is still referenced below, purely to satisfy MSB3644. -->
+        <NoStdLib>true</NoStdLib>
+        <DisableImplicitFrameworkReferences>true</DisableImplicitFrameworkReferences>
+
+        <!-- Keep well clear of anything the legacy csproj writes. -->
+        <OutputPath>bin\local\</OutputPath>
+        <IntermediateOutputPath>obj\local\</IntermediateOutputPath>
+        <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    </PropertyGroup>
+
+    <!-- Locate the Valheim install. Same probing order as the tracked csproj. -->
+    <Choose>
+        <When Condition="($(OS) == 'Unix' OR $(OS) == 'OSX') AND $(GamePath) == ''">
+            <PropertyGroup>
+                <GamePath Condition="!Exists('$(GamePath)')">$(HOME)/.steam/steam/steamapps/common/Valheim</GamePath>
+                <GamePath Condition="!Exists('$(GamePath)')">$(HOME)/Library/Application Support/Steam/steamapps/common/Valheim/Contents/MacOS</GamePath>
+            </PropertyGroup>
+        </When>
+        <When Condition="($(OS) == 'Windows_NT') AND $(GamePath) == ''">
+            <PropertyGroup>
+                <GamePath Condition="!Exists('$(GamePath)')">$([MSBuild]::GetRegistryValueFromView('HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Steam App 892970', 'InstallLocation', null, RegistryView.Registry64, RegistryView.Registry32))</GamePath>
+                <_SteamLibraryPath>$([MSBuild]::GetRegistryValueFromView('HKEY_CURRENT_USER\SOFTWARE\Valve\Steam', 'SteamPath', null, RegistryView.Registry32))</_SteamLibraryPath>
+                <GamePath Condition="!Exists('$(GamePath)') AND '$(_SteamLibraryPath)' != ''">$(_SteamLibraryPath)\steamapps\common\Valheim</GamePath>
+                <GamePath Condition="!Exists('$(GamePath)')">C:\Program Files\Steam\steamapps\common\Valheim</GamePath>
+                <GamePath Condition="!Exists('$(GamePath)')">C:\Program Files (x86)\Steam\steamapps\common\Valheim</GamePath>
+            </PropertyGroup>
+        </When>
+    </Choose>
+
+    <Target Name="CheckGamePath" BeforeTargets="BeforeBuild">
+        <Error Condition="!Exists('$(GamePath)\valheim_Data\Managed\assembly_valheim.dll')"
+               Text="Could not locate Valheim. GamePath resolved to '$(GamePath)'. Pass it explicitly: dotnet build -p:GamePath=&quot;D:\path\to\Valheim&quot;"/>
+    </Target>
+
+    <PropertyGroup>
+        <_Managed>$(GamePath)\valheim_Data\Managed</_Managed>
+        <!-- Search the game's Managed folder before the net48 targeting pack. Without
+             this the implicit (HintPath-less) mscorlib reference resolves to the
+             targeting pack, and netstandard 2.1's type forwards dead-end against it. -->
+        <AssemblySearchPaths>$(_Managed);$(AssemblySearchPaths)</AssemblySearchPaths>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all"/>
+        <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.4.3" PrivateAssets="all"/>
+        <!-- 2.0.18.2 (as pinned in packages.config) ships a .NET Framework MSBuild task
+             that cannot load under `dotnet` MSBuild; 2.0.46 ships a .NET Core one. -->
+        <PackageReference Include="ILRepack.Lib.MSBuild.Task" Version="2.0.46" PrivateAssets="all"/>
+    </ItemGroup>
+
+    <!-- The base class library, taken from the game rather than the targeting pack. -->
+    <ItemGroup>
+        <Reference Include="mscorlib" Private="false">
+            <HintPath>$(_Managed)\mscorlib.dll</HintPath>
+        </Reference>
+        <Reference Include="netstandard" Private="false">
+            <HintPath>$(_Managed)\netstandard.dll</HintPath>
+        </Reference>
+        <Reference Include="System" Private="false">
+            <HintPath>$(_Managed)\System.dll</HintPath>
+        </Reference>
+        <Reference Include="System.Core" Private="false">
+            <HintPath>$(_Managed)\System.Core.dll</HintPath>
+        </Reference>
+    </ItemGroup>
+
+    <!-- Valheim's own assemblies, publicized on the fly. -->
+    <ItemGroup>
+        <Reference Include="assembly_valheim" Publicize="true" Private="false">
+            <HintPath>$(_Managed)\assembly_valheim.dll</HintPath>
+        </Reference>
+        <Reference Include="assembly_guiutils" Publicize="true" Private="false">
+            <HintPath>$(_Managed)\assembly_guiutils.dll</HintPath>
+        </Reference>
+        <Reference Include="assembly_utils" Publicize="true" Private="false">
+            <HintPath>$(_Managed)\assembly_utils.dll</HintPath>
+        </Reference>
+        <Reference Include="Splatform" Private="false">
+            <HintPath>$(_Managed)\Splatform.dll</HintPath>
+        </Reference>
+    </ItemGroup>
+
+    <!-- Unity. Note ImageConversionModule: Valheim 1.0 (Unity 6) dropped the
+         "...Old.dll" variant the tracked csproj still points at. -->
+    <ItemGroup>
+        <Reference Include="UnityEngine" Private="false">
+            <HintPath>$(_Managed)\UnityEngine.dll</HintPath>
+        </Reference>
+        <Reference Include="UnityEngine.CoreModule" Private="false">
+            <HintPath>$(_Managed)\UnityEngine.CoreModule.dll</HintPath>
+        </Reference>
+        <Reference Include="UnityEngine.ImageConversionModule" Private="false">
+            <HintPath>$(_Managed)\UnityEngine.ImageConversionModule.dll</HintPath>
+        </Reference>
+        <Reference Include="UnityEngine.InputLegacyModule" Private="false">
+            <HintPath>$(_Managed)\UnityEngine.InputLegacyModule.dll</HintPath>
+        </Reference>
+        <Reference Include="UnityEngine.PhysicsModule" Private="false">
+            <HintPath>$(_Managed)\UnityEngine.PhysicsModule.dll</HintPath>
+        </Reference>
+        <Reference Include="UnityEngine.TextRenderingModule" Private="false">
+            <HintPath>$(_Managed)\UnityEngine.TextRenderingModule.dll</HintPath>
+        </Reference>
+        <Reference Include="UnityEngine.UI" Private="false">
+            <HintPath>$(_Managed)\UnityEngine.UI.dll</HintPath>
+        </Reference>
+        <Reference Include="Unity.TextMeshPro" Private="false">
+            <HintPath>$(_Managed)\Unity.TextMeshPro.dll</HintPath>
+        </Reference>
+    </ItemGroup>
+
+    <!-- Thunderstore Mod Manager keeps BepInEx and the plugins in a profile folder,
+         not in the game folder. Override either of these on the command line. -->
+    <PropertyGroup>
+        <ProfilePath Condition="'$(ProfilePath)' == '' AND '$(OS)' == 'Windows_NT'">$(APPDATA)\Thunderstore Mod Manager\DataFolder\Valheim\profiles\Default</ProfilePath>
+        <PluginDeployPath Condition="'$(PluginDeployPath)' == ''">$(ProfilePath)\BepInEx\plugins\Smoothbrain-TargetPortal</PluginDeployPath>
+    </PropertyGroup>
+
+    <!-- BepInEx / Harmony, from the Thunderstore profile if the game folder has no
+         BepInEx of its own (which is the case when mods are managed by r2modman/TMM). -->
+    <PropertyGroup>
+        <_BepInExCore Condition="'$(_BepInExCore)' == '' AND Exists('$(GamePath)\BepInEx\core\BepInEx.dll')">$(GamePath)\BepInEx\core</_BepInExCore>
+        <_BepInExCore Condition="'$(_BepInExCore)' == '' AND Exists('$(ProfilePath)\BepInEx\core\BepInEx.dll')">$(ProfilePath)\BepInEx\core</_BepInExCore>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Reference Include="BepInEx" Private="false">
+            <HintPath>$(_BepInExCore)\BepInEx.dll</HintPath>
+        </Reference>
+        <Reference Include="0Harmony" Private="false">
+            <HintPath>$(_BepInExCore)\0Harmony.dll</HintPath>
+        </Reference>
+    </ItemGroup>
+
+    <!-- Vendored helper assemblies. These get merged in by ILRepack, so they must
+         land in the output directory. -->
+    <ItemGroup>
+        <Reference Include="ServerSync">
+            <HintPath>ServerSync.dll</HintPath>
+        </Reference>
+        <Reference Include="Groups">
+            <HintPath>GroupsAPI.dll</HintPath>
+        </Reference>
+        <Reference Include="Guilds">
+            <HintPath>GuildsAPI.dll</HintPath>
+        </Reference>
+    </ItemGroup>
+
+    <ItemGroup>
+        <EmbeddedResource Include="portalicon.png" LogicalName="TargetPortal.portalicon.png"/>
+    </ItemGroup>
+
+    <!-- The tracked ILRepack.targets passes LibraryPath="$(OutputPath)" only, so every
+         assembly ILRepack needs to resolve (BepInEx, Harmony, Unity, Valheim) has to be
+         sitting in the output folder. The references above are Private=false, so stage
+         copies here rather than editing the tracked targets file. -->
+    <Target Name="StageILRepackDependencies" AfterTargets="Build" BeforeTargets="ILRepacker">
+        <Copy SourceFiles="@(ReferencePath)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true"/>
+    </Target>
+
+    <!-- ILRepack.targets in this directory does the merging; it is picked up
+         automatically by ILRepack.Lib.MSBuild.Task. Deploy the merged result. -->
+    <Target Name="Deploy" AfterTargets="ILRepacker" Condition="'$(SkipDeploy)' != 'true'">
+        <Error Condition="!Exists('$(PluginDeployPath)')"
+               Text="Plugin deploy folder does not exist: '$(PluginDeployPath)'. Pass -p:PluginDeployPath=... or -p:SkipDeploy=true"/>
+        <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginDeployPath)"/>
+        <Message Importance="high" Text="Deployed $(TargetFileName) -> $(PluginDeployPath)"/>
+    </Target>
+
+</Project>
